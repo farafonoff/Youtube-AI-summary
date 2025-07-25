@@ -38,7 +38,67 @@ def send_message_with_fallback(bot, chat_id, text, parse_mode='Markdown'):
             logger.error(f"Failed to send message even without formatting: {e2}")
             # Last resort - send a generic error message
             bot.send_message(chat_id, "⚠️ Summary generated but couldn't be displayed due to formatting issues. Please try again.")
+
+
+def send_summary_chunks(bot, chat_id, summary_text, service_name):
+    """Send summary in chunks with proper handling for very long summaries"""
+    try:
+        # If summary is short enough, send directly with fallback
+        if len(summary_text) <= 4096:
+            send_message_with_fallback(bot, chat_id, summary_text)
+            return
+        
+        # For very long summaries, try Telegraph first
+        try:
+            page_title = f"Video Summary - {service_name}"
+            telegraph_url = telegraph_service.create_page(
+                title=page_title,
+                content=summary_text.replace(f"🎥 **Video Summary** (via {service_name}):\n\n", ""),
+                video_url=None
+            )
             
+            if telegraph_url:
+                bot.send_message(
+                    chat_id,
+                    f"🎥 **Video Summary** (via {service_name})\n\n"
+                    f"The summary is too long for Telegram ({len(summary_text)} characters).\n"
+                    f"You can read it here: {telegraph_url}",
+                    parse_mode='Markdown'
+                )
+                return
+        except Exception as telegraph_error:
+            logger.warning(f"Telegraph failed for summary: {telegraph_error}")
+        
+        # Fallback to chunked messages if Telegraph fails
+        logger.info(f"Sending summary in chunks ({len(summary_text)} chars)")
+        chunk_size = 3500  # Leave room for part numbering
+        chunks = [summary_text[i:i+chunk_size] for i in range(0, len(summary_text), chunk_size)]
+        
+        for i, chunk in enumerate(chunks):
+            try:
+                if len(chunks) > 1:
+                    prefix = f"**Part {i+1}/{len(chunks)}:**\n\n" if i > 0 else ""
+                    chunk_text = f"{prefix}{chunk}"
+                else:
+                    chunk_text = chunk
+                
+                send_message_with_fallback(bot, chat_id, chunk_text)
+                
+            except Exception as chunk_error:
+                logger.error(f"Error sending chunk {i+1}: {chunk_error}")
+                # Try sending without any formatting as last resort
+                try:
+                    clean_chunk = chunk.replace('**', '').replace('*', '').replace('_', '').replace('`', '')
+                    bot.send_message(chat_id, clean_chunk, parse_mode=None)
+                except:
+                    # If even that fails, send a simple error message
+                    bot.send_message(chat_id, f"⚠️ Part {i+1} of summary couldn't be displayed due to formatting issues.")
+        
+    except Exception as e:
+        logger.error(f"Error sending summary chunks: {e}")
+        # Final fallback - send a simple message
+        bot.send_message(chat_id, "⚠️ Summary generated but couldn't be displayed. Please try again or check logs.")
+
 
 def extract_video_id(url):
     """Extract video ID from YouTube URL"""
@@ -155,17 +215,9 @@ def process_youtube_video(message, youtube_url):
             status_message.message_id
         )
         
-        # Send summary with improved error handling
+        # Send summary with robust chunking and Telegraph fallback
         summary_text = f"🎥 **Video Summary** (via {service_used}):\n\n{summary}"
-        
-        # Try to send with Markdown first, fallback to plain text if it fails
-        if len(summary_text) > 4096:
-            # Split long messages
-            chunks = [summary_text[i:i+4096] for i in range(0, len(summary_text), 4096)]
-            for chunk in chunks:
-                send_message_with_fallback(bot, message.chat.id, chunk)
-        else:
-            send_message_with_fallback(bot, message.chat.id, summary_text)
+        send_summary_chunks(bot, message.chat.id, summary_text, service_used)
         
         # Offer to send full transcription
         markup = types.InlineKeyboardMarkup()
@@ -344,13 +396,8 @@ def chunks_command(message):
             for i, chunk_summary in enumerate(chunk_summaries, 1):
                 response += f"**Chunk {i}:**\n{chunk_summary}\n\n"
             
-            # Send chunks in parts if too long
-            if len(response) > 4096:
-                chunks = [response[i:i+4096] for i in range(0, len(response), 4096)]
-                for chunk in chunks:
-                    send_message_with_fallback(bot, message.chat.id, chunk)
-            else:
-                send_message_with_fallback(bot, message.chat.id, response)
+            # Use robust chunking for long responses
+            send_summary_chunks(bot, message.chat.id, response, "Cache")
         else:
             bot.reply_to(message, f"❌ No cached chunk summaries found for video ID: {video_id}")
         
