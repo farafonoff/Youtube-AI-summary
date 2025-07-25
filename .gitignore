@@ -1,0 +1,133 @@
+# Environment and secrets
+.env
+*.key
+*.token
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pyvenv.cfg
+bin/
+include/
+lib/
+lib64/
+share/
+etc/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Audio and video files (temporary downloads)
+downloads/*.mp3
+downloads/*.mp4
+downloads/*.wav
+downloads/*.m4a
+
+# Transcription files (temporary)
+transcriptions/*.txt
+transcriptions/*.srt
+
+# Cache files
+cache/
+*.cache
+
+# Logs
+*.log
+logs/
+
+# Whisper.cpp build artifacts (keep the directory structure but ignore binaries)
+whisper.cpp/build/
+whisper.cpp/models/*.bin
+whisper.cpp/models/*.ggml
+
+# yt-dlp executable (platform specific)
+yt-dlp*
+youtube-dl*
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Audio files with Cyrillic names (from testing)
+*[а-яё]*.mp3
+*[а-яё]*.srt
+*[а-яё]*.txt
+
+# But keep test files - they are beautiful! 
+!test_*.py
+!*_test.py
+!tests/
+
+# Keep important project files
+!*.py
+!*.md
+!*.json
+!*.yml
+!*.yaml
+!.gitignore
+!.env.example
+
+# Keep shell scripts
+!*.sh
