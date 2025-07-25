@@ -2,9 +2,43 @@ import requests
 import json
 import logging
 import os
+import tiktoken
 from config import OPENROUTER_API_KEY
 
 logger = logging.getLogger(__name__)
+
+
+def split_text_into_chunks(text, max_tokens=15000, overlap=1000, model="gpt-4o"):
+    """
+    Split text into chunks based on token count rather than character count.
+    This ensures we don't exceed model token limits and provides better chunking.
+    """
+    try:
+        enc = tiktoken.encoding_for_model(model)
+        tokens = enc.encode(text)
+        
+        chunks = []
+        start = 0
+        while start < len(tokens):
+            end = min(start + max_tokens, len(tokens))
+            chunk = enc.decode(tokens[start:end])
+            chunks.append(chunk)
+            start += max_tokens - overlap  # move forward with overlap
+        
+        return chunks
+    except Exception as e:
+        logger.warning(f"Tiktoken chunking failed: {e}, falling back to character-based chunking")
+        # Fallback to character-based chunking
+        max_chars = max_tokens * 4  # Rough approximation: 4 chars per token
+        overlap_chars = overlap * 4
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += max_chars - overlap_chars
+        return chunks
 
 
 class OpenRouterSummarizationService:
@@ -37,10 +71,10 @@ class OpenRouterSummarizationService:
                 return cached_summary
         
         try:
-            # For very long texts, split into chunks
-            max_chunk_size = 15000  # DeepSeek can handle longer texts
-            if len(text) > max_chunk_size:
-                summary = self._summarize_long_text(text, max_chunk_size, video_id)
+            # For very long texts, split into chunks using intelligent token-based chunking
+            max_tokens = 15000  # DeepSeek R1 can handle up to ~30k tokens, leave room for response
+            if len(text) > max_tokens * 3:  # Rough estimate: 3 chars per token
+                summary = self._summarize_long_text(text, max_tokens, video_id)
             else:
                 summary = self._summarize_single_chunk(text)
             
@@ -75,7 +109,7 @@ class OpenRouterSummarizationService:
                         "content": prompt
                     }
                 ],
-                "max_tokens": 1000,
+                "max_tokens": 8192,  # Adjust based on model limits
                 "temperature": 0.1,
                 "top_p": 0.9
             }
@@ -107,12 +141,12 @@ class OpenRouterSummarizationService:
             logger.error(f"OpenRouter API request failed: {e}")
             return f"Request failed: {str(e)}"
     
-    def _summarize_long_text(self, text, max_chunk_size, video_id=None):
-        """Summarize very long text by splitting into chunks"""
+    def _summarize_long_text(self, text, max_tokens, video_id=None):
+        """Summarize very long text by splitting into intelligent token-based chunks"""
         try:
-            # Split text into chunks
-            chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
-            logger.info(f"Splitting long text into {len(chunks)} chunks")
+            # Split text into chunks using tiktoken for accurate token counting
+            chunks = split_text_into_chunks(text, max_tokens=max_tokens, overlap=1000)
+            logger.info(f"Splitting long text into {len(chunks)} chunks using intelligent token-based chunking")
             
             # Check if we have cached chunk summaries first
             if video_id:
@@ -151,7 +185,7 @@ class OpenRouterSummarizationService:
                 if len(summaries) > 1:
                     combined_summary = " ".join(summaries)
                     # If combined is still too long, summarize the summaries
-                    if len(combined_summary) > max_chunk_size:
+                    if len(combined_summary) > max_tokens * 4:  # rough char estimate
                         final_prompt = f"""Please create a comprehensive summary of these key points:
 
 {combined_summary}
