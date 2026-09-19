@@ -38,4 +38,5 @@ fi
 echo "✅ All dependencies found"
 echo "🚀 Starting bot..."
 
-python bot.py
+source ./bin/activate 2>/dev/null || true
+python3 bot.py

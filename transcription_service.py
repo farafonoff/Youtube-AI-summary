@@ -1,6 +1,6 @@
 import os
 import subprocess
-from config import WHISPER_CLI_PATH, WHISPER_MODEL_PATH, TRANSCRIPTIONS_DIR
+from config import WHISPER_CLI_PATH, WHISPER_MODEL_PATH, TRANSCRIPTIONS_DIR, FFPROBE_PATH
 
 
 class TranscriptionService:
@@ -9,43 +9,48 @@ class TranscriptionService:
         self.whisper_model_path = WHISPER_MODEL_PATH
         self.transcriptions_dir = TRANSCRIPTIONS_DIR
     
-    def transcribe_audio(self, audio_file_path):
-        """Transcribe audio file using whisper.cpp"""
+    def get_audio_duration(self, audio_file_path):
+        """Get audio duration in seconds using ffprobe"""
         try:
-            # Extract filename without extension
+            cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration',
+                   '-of', 'default=noprint_wrappers=1:nokey=1', audio_file_path]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception:
+            return None
+    
+    def transcribe_audio(self, audio_file_path):
+        """Transcribe audio file using whisper.cpp, returns (transcription, duration_seconds)"""
+        try:
             base_name = os.path.splitext(os.path.basename(audio_file_path))[0]
             output_prefix = os.path.join(self.transcriptions_dir, base_name)
             txt_file = f"{output_prefix}.txt"
             
-            # Check if transcription already exists and is not empty
             if os.path.exists(txt_file) and os.path.getsize(txt_file) > 0:
-                print(f"✅ Transcription file already exists: {txt_file}")
                 with open(txt_file, 'r', encoding='utf-8') as f:
                     transcription = f.read().strip()
-                if transcription:  # Make sure it's not just whitespace
-                    return transcription
+                if transcription:
+                    audio_duration = self.get_audio_duration(audio_file_path)
+                    return transcription, audio_duration
                 else:
                     print("⚠️ Existing transcription file is empty, re-transcribing...")
             
-            print(f"🔄 Transcribing audio file: {audio_file_path}")
-            
-            # Whisper command
             cmd = [
                 self.whisper_cli_path,
                 '-m', self.whisper_model_path,
-                '-l', 'auto',  # Auto-detect language
+                '-l', 'auto',
                 '--output-txt',
-                '-of', output_prefix,  # Output file prefix
+                '-of', output_prefix,
                 '-f', audio_file_path
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             
-            # Read the generated text file
             if os.path.exists(txt_file):
                 with open(txt_file, 'r', encoding='utf-8') as f:
                     transcription = f.read().strip()
-                return transcription
+                audio_duration = self.get_audio_duration(audio_file_path)
+                return transcription, audio_duration
             else:
                 raise Exception("Transcription file not created")
                 

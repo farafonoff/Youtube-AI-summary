@@ -3,12 +3,54 @@ import json
 import logging
 import os
 import tiktoken
+import re
 from config import OPENROUTER_API_KEY
 
 logger = logging.getLogger(__name__)
 
 
-def split_text_into_chunks(text, max_tokens=15000, overlap=1000, model="gpt-4o"):
+def get_video_title(video_id):
+    """Fetch the YouTube video title using the og:meta tag"""
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if response.status_code == 200:
+            match = re.search(r'<meta property="og:title" content="([^"]*)"', response.text)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        logger.warning(f"Failed to fetch video title: {e}")
+    return None
+
+
+def get_free_models():
+    """Возвращает список всех актуальных бесплатных моделей на OpenRouter"""
+    try:
+        response = requests.get("https://openrouter.ai/api/v1/models", timeout=30)
+        if response.status_code == 200:
+            models_data = response.json().get("data", [])
+            free_models = []
+            for m in models_data:
+                if m["id"].endswith(":free"):
+                    free_models.append({
+                        "id": m["id"],
+                        "context_length": m.get("context_length", "unknown")
+                    })
+            return free_models
+    except Exception as e:
+        logger.error(f"Failed to fetch free models: {e}")
+    return []
+
+
+def get_first_free_model():
+    """Returns the first available free model id, defaults to deepseek/r1:free if none found"""
+    free_models = get_free_models()
+    if free_models:
+        return free_models[0]["id"]
+    return "deepseek/deepseek-r1-0528:free"
+
+
+def split_text_into_chunks(text, max_tokens=250000, overlap=5000, model="gpt-4o"):
     """
     Split text into chunks based on token count rather than character count.
     This ensures we don't exceed model token limits and provides better chunking.
@@ -23,13 +65,12 @@ def split_text_into_chunks(text, max_tokens=15000, overlap=1000, model="gpt-4o")
             end = min(start + max_tokens, len(tokens))
             chunk = enc.decode(tokens[start:end])
             chunks.append(chunk)
-            start += max_tokens - overlap  # move forward with overlap
+            start += max_tokens - overlap
         
         return chunks
     except Exception as e:
         logger.warning(f"Tiktoken chunking failed: {e}, falling back to character-based chunking")
-        # Fallback to character-based chunking
-        max_chars = max_tokens * 4  # Rough approximation: 4 chars per token
+        max_chars = max_tokens * 4
         overlap_chars = overlap * 4
         chunks = []
         start = 0
@@ -42,11 +83,18 @@ def split_text_into_chunks(text, max_tokens=15000, overlap=1000, model="gpt-4o")
 
 
 class OpenRouterSummarizationService:
-    def __init__(self):
+    def __init__(self, model=None):
         self.api_key = OPENROUTER_API_KEY
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "deepseek/deepseek-r1-0528:free"
+        self.model = model or get_first_free_model()
         self.is_initialized = self._check_api_key()
+        self.free_models = get_free_models()
+        self.chunk_count = 0
+        self.total_tokens = 0
+    
+    def get_available_models(self):
+        """Return the list of available free models with context lengths"""
+        return self.free_models
     
     def _check_api_key(self):
         """Check if OpenRouter API key is configured"""
@@ -69,30 +117,110 @@ class OpenRouterSummarizationService:
             cached_summary = self._load_from_cache(video_id)
             if cached_summary:
                 return cached_summary
+
+        # Fetch video title for anti-clickbait analysis
+        title = None
+        if video_id:
+            title = get_video_title(video_id)
+
+        self.chunk_count = 0
+        self.total_tokens = 0
         
         try:
             # For very long texts, split into chunks using intelligent token-based chunking
-            max_tokens = 15000  # DeepSeek R1 can handle up to ~30k tokens, leave room for response
+            max_tokens = 250000  # Most free models support ~260k context
             if len(text) > max_tokens * 3:  # Rough estimate: 3 chars per token
-                summary = self._summarize_long_text(text, max_tokens, video_id)
+                summary = self._summarize_long_text(text, max_tokens, video_id, title=title)
             else:
-                summary = self._summarize_single_chunk(text)
+                summary = self._summarize_single_chunk(text, title=title)
+                self.chunk_count = 1
+                try:
+                    enc = tiktoken.encoding_for_model(self.model)
+                except Exception:
+                    enc = tiktoken.get_encoding("cl100k_base")
+                self.total_tokens = len(enc.encode(text))
             
             # Save to cache if video_id provided
             if video_id and summary and not summary.startswith("Summarization failed"):
                 self._save_to_cache(video_id, summary)
             
             return summary
-                
+                 
         except Exception as e:
             logger.error(f"OpenRouter summarization failed: {e}")
             return f"Summarization failed: {str(e)}"
-    
-    def _summarize_single_chunk(self, text):
+
+    def qa(self, question, transcript=None, summary=None):
+        """Answer a question based on the provided transcript and summary"""
+        if not self.is_initialized:
+            return "OpenRouter API key not configured"
+        try:
+            context_parts = []
+            if summary:
+                context_parts.append(f"Summary:\n{summary}")
+            if transcript:
+                context_parts.append(f"Transcript:\n{transcript}")
+
+            context = "\n\n---\n\n".join(context_parts)
+            prompt = f"""Based on the following context, answer the question in Russian.
+
+{context}
+
+Question: {question}
+
+Answer:"""
+
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/youtube-summarizer-bot",
+                "X-Title": "YouTube Summarizer Bot"
+            }
+
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "max_tokens": 2048,
+                "temperature": 0.3,
+                "top_p": 0.9
+            }
+
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    answer = result['choices'][0]['message']['content'].strip()
+                    answer = self._clean_markdown_for_telegram(answer)
+                    logger.info(f"✅ OpenRouter Q&A successful ({len(answer)} chars)")
+                    return answer
+                else:
+                    return "No answer generated"
+            else:
+                logger.error(f"OpenRouter Q&A error: {response.status_code} - {response.text}")
+                return f"API error: {response.status_code}"
+
+        except requests.exceptions.Timeout:
+            return "Q&A timeout"
+        except Exception as e:
+            logger.error(f"OpenRouter Q&A failed: {e}")
+            return f"Q&A failed: {str(e)}"
+
+    def _summarize_single_chunk(self, text, title=None):
         """Summarize a single chunk of text"""
         try:
             # Create the prompt for summarization
-            prompt = self._create_summarization_prompt(text)
+            prompt = self._create_summarization_prompt(text, title=title)
             
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -141,11 +269,16 @@ class OpenRouterSummarizationService:
             logger.error(f"OpenRouter API request failed: {e}")
             return f"Request failed: {str(e)}"
     
-    def _summarize_long_text(self, text, max_tokens, video_id=None):
+    def _summarize_long_text(self, text, max_tokens, video_id=None, title=None):
         """Summarize very long text by splitting into intelligent token-based chunks"""
         try:
-            # Split text into chunks using tiktoken for accurate token counting
-            chunks = split_text_into_chunks(text, max_tokens=max_tokens, overlap=1000)
+            try:
+                enc = tiktoken.encoding_for_model(self.model)
+            except Exception:
+                enc = tiktoken.get_encoding("cl100k_base")
+            self.total_tokens = len(enc.encode(text))
+            chunks = split_text_into_chunks(text, max_tokens=max_tokens, overlap=5000)
+            self.chunk_count = len(chunks)
             logger.info(f"Splitting long text into {len(chunks)} chunks using intelligent token-based chunking")
             
             # Check if we have cached chunk summaries first
@@ -162,7 +295,7 @@ class OpenRouterSummarizationService:
                     for i, chunk in enumerate(chunks):
                         if len(chunk.strip()) > 50:
                             logger.info(f"Processing chunk {i+1}/{len(chunks)}")
-                            summary = self._summarize_single_chunk(chunk)
+                            summary = self._summarize_single_chunk(chunk, title=title)
                             if summary and not summary.startswith("Summarization failed"):
                                 summaries.append(summary)
                                 chunk_summaries.append(summary)
@@ -176,7 +309,7 @@ class OpenRouterSummarizationService:
                 for i, chunk in enumerate(chunks):
                     if len(chunk.strip()) > 50:
                         logger.info(f"Processing chunk {i+1}/{len(chunks)}")
-                        summary = self._summarize_single_chunk(chunk)
+                        summary = self._summarize_single_chunk(chunk, title=title)
                         if summary and not summary.startswith("Summarization failed"):
                             summaries.append(summary)
             
@@ -205,22 +338,43 @@ Provide a well-structured summary in Russian that captures the main topics and i
             logger.error(f"Long text summarization failed: {e}")
             return f"Long text summarization failed: {str(e)}"
     
-    def _create_summarization_prompt(self, text):
-        """Create an effective summarization prompt"""
-        return f"""Please create a comprehensive and well-structured summary of the following text. The text appears to be a transcript from a Russian-language video or podcast.
+    def _create_summarization_prompt(self, text, title=None):
+        """Create an effective summarization prompt with anti-clickbait analysis"""
+        task1 = ""
+        task2 = ""
+        if title:
+            task1 = f"""TASK 1 TITLE DECODER (ANTI-CLICKBAIT):
+Explain directly and factually in 2-3 sentences what the video title refers to based on the transcript.
+Answer the implicit question or promise in the title right away.
+Expose any exaggeration or clickbait naturally.
 
-Instructions:
-1. Summarize in Russian (the same language as the source)
-2. Capture the main topics, key points, and important details
-3. Organize the summary logically with clear structure
-4. Keep the most interesting and relevant information
-5. Make it readable and engaging
-6. Aim for about 200-400 words
+Video title: {title}
 
-Text to summarize:
-{text}
+"""
+        task2 = """TASK 2 ANALYTICAL SUMMARY:
+Summarize the main points in clear, factual bullet points.
 
-Summary:"""
+"""
+        return f"""You are a precise transcript summarizer. Summarize the following YouTube transcript directly and factually in Russian.
+
+INSTRUCTIONS:
+{task1}{task2}- Focus on concrete facts, claims, specific names, examples, and arguments presented in the transcript.
+- Write concisely using neutral, direct Russian.
+- Output length: 250-400 words.
+- DO NOT output any labels like "TITLE DECODER", "ANALYTICAL SUMMARY", "TASK 1", "TASK 2", or any system descriptions in the final answer.
+
+OUTPUT FORMAT (THIS IS THE ONLY THING YOU SHOULD OUTPUT):
+
+📌 **Что за заголовком**
+[Связный и естественный ответ на заголовок в 2-3 предложениях без сухого канцелярита]
+
+🔑 **Главное из разговора**
+• [Конкретный факт, аргумент или тезис]
+• [Конкретный факт, аргумент или тезис]
+• ...
+
+Transcript:
+{text}"""
     
     def get_service_info(self):
         """Get information about the service"""
@@ -228,7 +382,8 @@ Summary:"""
             "service": "OpenRouter",
             "model": self.model,
             "initialized": self.is_initialized,
-            "api_configured": bool(self.api_key and self.api_key != "your_openrouter_api_key_here")
+            "api_configured": bool(self.api_key and self.api_key != "your_openrouter_api_key_here"),
+            "free_models": self.free_models
         }
     
     def _clean_markdown_for_telegram(self, text):
