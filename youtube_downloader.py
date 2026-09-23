@@ -25,7 +25,7 @@ class YouTubeDownloader:
     def get_duration(self, youtube_url):
         """Get video duration in seconds using yt-dlp"""
         try:
-            cmd = [self.yt_dlp_path, '--get-duration', youtube_url]
+            cmd = [self.yt_dlp_path, '--js-runtimes', 'node', '--get-duration', youtube_url]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             return float(result.stdout.strip())
         except Exception:
@@ -63,6 +63,7 @@ class YouTubeDownloader:
             
             cmd = [
                 self.yt_dlp_path,
+                '--js-runtimes', 'node',
                 '-x', '--audio-format', 'mp3',
                 '-o', os.path.join(self.downloads_dir, f'audio_{video_id}.%(ext)s'),
                 youtube_url
