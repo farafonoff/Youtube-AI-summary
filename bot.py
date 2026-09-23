@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import subprocess
 import telebot
 from telebot import types
 import logging
@@ -9,7 +10,7 @@ from transcription_service import TranscriptionService
 from summarization_service import SummarizationService
 from openrouter_summarization_service import OpenRouterSummarizationService, get_free_models
 from telegraph_service import TelegraphService
-from config import BOT_TOKEN, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR
+from config import BOT_TOKEN, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, YT_DLP_PATH
 import queue
 import threading
 
@@ -774,6 +775,24 @@ Get free API key at: https://openrouter.ai/
     except Exception as e:
         logger.error(f"Services command error: {e}")
         bot.reply_to(message, f"❌ Services check failed: {str(e)}")
+
+
+@bot.message_handler(commands=['update'])
+def update_command(message):
+    """Update yt-dlp"""
+    try:
+        bot.reply_to(message, "🔄 Updating yt-dlp...")
+        result = subprocess.run(
+            [YT_DLP_PATH, '--update'],
+            capture_output=True, text=True, check=True
+        )
+        bot.reply_to(message, f"✅ yt-dlp updated successfully\n{result.stdout.strip()}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Update failed: {e.stderr}")
+        bot.reply_to(message, f"❌ yt-dlp update failed: {e.stderr.strip()}")
+    except Exception as e:
+        logger.error(f"Update error: {e}")
+        bot.reply_to(message, f"❌ Update error: {str(e)}")
 
 
 def smart_summarize(text, video_id=None):

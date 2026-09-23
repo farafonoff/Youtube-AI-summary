@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.youtube-watcher.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/artem_farafonov/Projects/youtube-watcher/scripts/run_bot.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/artem_farafonov/Projects/youtube-watcher</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/artem_farafonov/Projects/youtube-watcher/logs/bot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/artem_farafonov/Projects/youtube-watcher/logs/bot.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/artem_farafonov/Projects/youtube-watcher/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/artem_farafonov</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
